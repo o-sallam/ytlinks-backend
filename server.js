@@ -36,7 +36,7 @@ app.get('/api/youtube_search', async (req, res) => {
         '--no-zygote',
         '--single-process'
       ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome'
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium'
     });
     
     console.log('New page created in Puppeteer.');
