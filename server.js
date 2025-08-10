@@ -39,19 +39,18 @@ app.get('/api/youtube_search', async (req, res) => {
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome'
     });
     
-    const puppeteerPage = await browser.newPage();
-    await puppeteerPage.goto(searchUrl, { waitUntil: 'networkidle2' });
     console.log('New page created in Puppeteer.');
+    const puppeteerPage = await browser.newPage();
     
     // Navigate to YouTube search page
     const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}`;
     console.log(`Navigating to URL: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: 'networkidle2' });
+    await puppeteerPage.goto(searchUrl, { waitUntil: 'networkidle2' });
     console.log('Navigation to YouTube search page completed.');
     
     // Extract video information
     console.log('Extracting video information from the page...');
-    const videos = await page.evaluate(() => {
+    const videos = await puppeteerPage.evaluate(() => {
       const videoElements = Array.from(document.querySelectorAll('ytd-video-renderer'));
       return videoElements.slice(0, 5).map(videoElement => {
         const titleElement = videoElement.querySelector('#video-title');
