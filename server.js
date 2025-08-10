@@ -27,12 +27,20 @@ app.get('/api/youtube_search', async (req, res) => {
     // Launch puppeteer browser
     console.log('Launching Puppeteer browser...');
     const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process'
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome'
     });
-    console.log('Browser launched successfully.');
     
-    const page = await browser.newPage();
+    const puppeteerPage = await browser.newPage();
+    await puppeteerPage.goto(searchUrl, { waitUntil: 'networkidle2' });
     console.log('New page created in Puppeteer.');
     
     // Navigate to YouTube search page
