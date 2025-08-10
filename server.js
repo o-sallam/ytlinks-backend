@@ -144,20 +144,43 @@ app.get('/api/stream/:videoId', async (req, res) => {
   }
   
   try {
+    console.log(`Starting video stream setup for videoId: ${videoId}`);
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    
+    console.log('Fetching video info...');
     const info = await ytdl.getInfo(videoUrl);
+    console.log('Video info fetched successfully');
     
     // Get the highest quality format that includes both video and audio
-    const format = ytdl.chooseFormat(info.formats, { quality: 'highest' });
+    const format = ytdl.chooseFormat(info.formats, { 
+      quality: 'highest',
+      filter: 'audioandvideo' 
+    });
+    console.log('Selected format:', format.qualityLabel);
     
     // Set response headers
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Accept-Ranges', 'bytes');
     
+    console.log('Creating video stream...');
     // Create stream with time offset if specified
     const stream = ytdl(videoUrl, {
       format: format,
-      begin: start ? `${start}s` : '0s'
+      begin: start ? `${start}s` : '0s',
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      }
+    });
+    
+    // Handle stream events
+    stream.on('info', (info, format) => {
+      console.log('Stream info received');
+    });
+    
+    stream.on('progress', (chunkLength, downloaded, total) => {
+      console.log(`Progress: ${(downloaded / total * 100).toFixed(2)}%`);
     });
     
     // Pipe the video stream to response
@@ -167,13 +190,13 @@ app.get('/api/stream/:videoId', async (req, res) => {
     stream.on('error', (error) => {
       console.error('Streaming error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream video' });
+        res.status(500).json({ error: 'Failed to stream video', details: error.message });
       }
     });
     
   } catch (error) {
     console.error('Error setting up video stream:', error);
-    res.status(500).json({ error: 'Failed to setup video stream' });
+    res.status(500).json({ error: 'Failed to setup video stream', details: error.message });
   }
 });
 
