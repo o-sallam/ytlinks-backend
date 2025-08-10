@@ -5,7 +5,12 @@ const puppeteer = require('puppeteer');
 const app = express();
 
 // Enable CORS for all origins
-app.use(cors({ origin: 'https://ytlinks-backend-production.up.railway.app' }));
+const corsOptions = {
+  origin: ["https://ytlinks-backend-production.up.railway.app", "http://localhost:3000"],
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"],
+};
+app.use(cors(corsOptions));
 
 // Parse JSON bodies
 app.use(express.json());
