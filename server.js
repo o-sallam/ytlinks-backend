@@ -20,18 +20,24 @@ app.get('/api/youtube_search', async (req, res) => {
   
   try {
     // Launch puppeteer browser
+    console.log('Launching Puppeteer browser...');
     const browser = await puppeteer.launch({
       headless: 'new',
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
+    console.log('Browser launched successfully.');
     
     const page = await browser.newPage();
+    console.log('New page created in Puppeteer.');
     
     // Navigate to YouTube search page
     const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}`;
+    console.log(`Navigating to URL: ${searchUrl}`);
     await page.goto(searchUrl, { waitUntil: 'networkidle2' });
+    console.log('Navigation to YouTube search page completed.');
     
     // Extract video information
+    console.log('Extracting video information from the page...');
     const videos = await page.evaluate(() => {
       const videoElements = Array.from(document.querySelectorAll('ytd-video-renderer'));
       return videoElements.slice(0, 5).map(videoElement => {
@@ -51,11 +57,14 @@ app.get('/api/youtube_search', async (req, res) => {
       });
     });
     
+    console.log('Closing Puppeteer browser...');
     await browser.close();
+    console.log('Browser closed successfully.');
     
     res.json(videos);
   } catch (error) {
     console.error('Error scraping YouTube:', error);
+    console.error('Request details:', { keyword, page });
     res.status(500).json({ error: 'Failed to scrape YouTube search results' });
   }
 });
