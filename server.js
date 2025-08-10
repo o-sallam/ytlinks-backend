@@ -5,7 +5,7 @@ const puppeteer = require('puppeteer');
 const app = express();
 
 // Enable CORS for all origins
-app.use(cors());
+app.use(cors({ origin: 'https://ytlinks-backend-uzoh.vercel.app' }));
 
 // Parse JSON bodies
 app.use(express.json());
