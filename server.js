@@ -151,11 +151,26 @@ app.get('/api/stream/:videoId', async (req, res) => {
     const info = await ytdl.getInfo(videoUrl);
     console.log('Video info fetched successfully');
     
-    // Get the highest quality format that includes both video and audio
-    const format = ytdl.chooseFormat(info.formats, { 
-      quality: 'highest',
-      filter: 'audioandvideo' 
-    });
+    // Try different format selection strategies
+    let format;
+    try {
+      // First try: highest quality with both audio and video
+      format = ytdl.chooseFormat(info.formats, { 
+        quality: 'highest',
+        filter: 'audioandvideo'
+      });
+    } catch (formatError) {
+      console.log('Failed to get highest quality format, trying alternative...');
+      // Second try: any format with both audio and video
+      const formats = ytdl.filterFormats(info.formats, 'audioandvideo');
+      format = formats[0];
+      
+      if (!format) {
+        // Last resort: try separate audio and video streams
+        format = ytdl.chooseFormat(info.formats, { quality: 'highest' });
+      }
+    }
+    
     console.log('Selected format:', format.qualityLabel);
     
     // Set response headers
@@ -163,18 +178,19 @@ app.get('/api/stream/:videoId', async (req, res) => {
     res.setHeader('Accept-Ranges', 'bytes');
     
     console.log('Creating video stream...');
-    // Create stream with time offset if specified
-    const stream = ytdl(videoUrl, {
+    const streamOptions = {
       format: format,
       begin: start ? `${start}s` : '0s',
       requestOptions: {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-      }
-    });
+      },
+      range: { start: 0 }
+    };
     
-    // Handle stream events
+    const stream = ytdl(videoUrl, streamOptions);
+    
     stream.on('info', (info, format) => {
       console.log('Stream info received');
     });
@@ -183,20 +199,25 @@ app.get('/api/stream/:videoId', async (req, res) => {
       console.log(`Progress: ${(downloaded / total * 100).toFixed(2)}%`);
     });
     
-    // Pipe the video stream to response
     stream.pipe(res);
     
-    // Handle stream errors
     stream.on('error', (error) => {
       console.error('Streaming error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream video', details: error.message });
+        res.status(500).json({ 
+          error: 'Failed to stream video', 
+          details: error.message,
+          format: format.qualityLabel 
+        });
       }
     });
     
   } catch (error) {
     console.error('Error setting up video stream:', error);
-    res.status(500).json({ error: 'Failed to setup video stream', details: error.message });
+    res.status(500).json({ 
+      error: 'Failed to setup video stream', 
+      details: error.message 
+    });
   }
 });
 
