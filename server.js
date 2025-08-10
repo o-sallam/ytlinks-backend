@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
+const ytdl = require('ytdl-core');
 
 const app = express();
 
@@ -130,6 +131,49 @@ app.get('/api/video/:videoId', async (req, res) => {
   } catch (error) {
     console.error('Error fetching video details:', error);
     res.status(500).json({ error: 'Failed to fetch video details' });
+  }
+});
+
+// Video streaming endpoint
+app.get('/api/stream/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+  const { start } = req.query;
+  
+  if (!videoId) {
+    return res.status(400).json({ error: 'Video ID is required' });
+  }
+  
+  try {
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const info = await ytdl.getInfo(videoUrl);
+    
+    // Get the highest quality format that includes both video and audio
+    const format = ytdl.chooseFormat(info.formats, { quality: 'highest' });
+    
+    // Set response headers
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    
+    // Create stream with time offset if specified
+    const stream = ytdl(videoUrl, {
+      format: format,
+      begin: start ? `${start}s` : '0s'
+    });
+    
+    // Pipe the video stream to response
+    stream.pipe(res);
+    
+    // Handle stream errors
+    stream.on('error', (error) => {
+      console.error('Streaming error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream video' });
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error setting up video stream:', error);
+    res.status(500).json({ error: 'Failed to setup video stream' });
   }
 });
 
