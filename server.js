@@ -81,6 +81,58 @@ app.get('/api/youtube_search', async (req, res) => {
   }
 });
 
+// YouTube video details endpoint
+app.get('/api/video/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+  
+  if (!videoId) {
+    return res.status(400).json({ error: 'Video ID is required' });
+  }
+  
+  try {
+    console.log('Launching Puppeteer browser for video details...');
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process'
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium'
+    });
+    
+    const puppeteerPage = await browser.newPage();
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    console.log(`Navigating to video URL: ${videoUrl}`);
+    
+    await puppeteerPage.goto(videoUrl, { waitUntil: 'networkidle2' });
+    
+    // Extract video details
+    const videoDetails = await puppeteerPage.evaluate(() => {
+      const title = document.querySelector('h1.ytd-video-primary-info-renderer')?.textContent?.trim();
+      const description = document.querySelector('ytd-expander#description')?.textContent?.trim();
+      const channelName = document.querySelector('ytd-channel-name yt-formatted-string.ytd-channel-name')?.textContent?.trim();
+      
+      return {
+        title,
+        description,
+        channelName,
+        embedUrl: `https://www.youtube.com/embed/${window.location.search.split('v=')[1]}`
+      };
+    });
+    
+    await browser.close();
+    res.json(videoDetails);
+    
+  } catch (error) {
+    console.error('Error fetching video details:', error);
+    res.status(500).json({ error: 'Failed to fetch video details' });
+  }
+});
+
 // Serve static assets in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static('client/build'));
