@@ -162,6 +162,8 @@ app.get("/api/video/:videoId", async (req, res) => {
 // Video streaming endpoint
 const { spawn } = require("child_process");
 
+const { exec } = require("child_process");
+
 app.get("/api/stream/:videoId", (req, res) => {
   const { videoId } = req.params;
   console.log("Requested videoId:", videoId);
@@ -178,39 +180,45 @@ app.get("/api/stream/:videoId", (req, res) => {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
   console.log(`Spawning yt-dlp for: ${videoUrl}`);
 
-  // yt-dlp command: best video+audio up to 720p, output to stdout
-  const ytDlp = spawn("/usr/local/bin/yt-dlp", [
-    "-f",
-    "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "-o",
-    "-",
-    videoUrl,
-  ]);
-
-  res.setHeader("Content-Type", "video/mp4");
-
-  ytDlp.stdout.pipe(res);
-
-  ytDlp.stderr.on("data", (data) => {
-    console.error("yt-dlp error:", data.toString());
-  });
-
-  ytDlp.on("error", (err) => {
-    console.error("Failed to start yt-dlp:", err);
-    if (!res.headersSent) {
-      res
-        .status(500)
-        .json({ error: "Failed to start yt-dlp", details: err.message });
+  // Get duration using yt-dlp --get-duration
+  exec(`/usr/local/bin/yt-dlp --get-duration ${videoUrl}`,(err, stdout) => {
+    if (!err && stdout) {
+      res.setHeader("X-Video-Duration", stdout.trim());
     }
-  });
+    // yt-dlp command: best video+audio up to 720p, output to stdout
+    const ytDlp = spawn("/usr/local/bin/yt-dlp", [
+      "-f",
+      "bestvideo[height<=720]+bestaudio/best[height<=720]",
+      "-o",
+      "-",
+      videoUrl,
+    ]);
 
-  ytDlp.on("close", (code) => {
-    if (code !== 0) {
-      console.error(`yt-dlp exited with code ${code}`);
+    res.setHeader("Content-Type", "video/mp4");
+
+    ytDlp.stdout.pipe(res);
+
+    ytDlp.stderr.on("data", (data) => {
+      console.error("yt-dlp error:", data.toString());
+    });
+
+    ytDlp.on("error", (err) => {
+      console.error("Failed to start yt-dlp:", err);
       if (!res.headersSent) {
-        res.status(500).json({ error: "yt-dlp failed", code });
+        res
+          .status(500)
+          .json({ error: "Failed to start yt-dlp", details: err.message });
       }
-    }
+    });
+
+    ytDlp.on("close", (code) => {
+      if (code !== 0) {
+        console.error(`yt-dlp exited with code ${code}`);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "yt-dlp failed", code });
+        }
+      }
+    });
   });
 });
 
