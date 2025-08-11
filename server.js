@@ -146,13 +146,23 @@ app.get('/api/stream/:videoId', async (req, res) => {
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const info = await ytdl.getInfo(videoUrl);
-    const format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highest' });
+    let format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highest' });
+    let videoSize = parseInt(format.contentLength || '0', 10);
 
-    // contentLength may be undefined for some formats, fallback to 0 if not available
-    const videoSize = parseInt(format.contentLength || '0', 10);
-    if (!videoSize) {
-      return res.status(500).json({ error: 'Could not determine video size.' });
+    // fallback: جرّب فورمات أخرى لو الحجم غير متوفر أو حدث خطأ
+    if (!videoSize || !format.url) {
+      const fallbackFormat = info.formats.find(f => f.contentLength && f.mimeType && f.mimeType.includes('mp4') && f.qualityLabel && f.hasAudio && f.hasVideo);
+      if (fallbackFormat) {
+        format = fallbackFormat;
+        videoSize = parseInt(format.contentLength, 10);
+        console.warn('Using fallback format:', format.qualityLabel, format.mimeType);
+      }
     }
+
+    if (!videoSize) {
+      return res.status(500).json({ error: 'Could not determine video size.', details: { format } });
+    }
+
     const CHUNK_SIZE = 10 ** 6; // 1MB chunks
     const start = Number(range.replace(/\D/g, ""));
     const end = Math.min(start + CHUNK_SIZE - 1, videoSize - 1);
@@ -165,10 +175,30 @@ app.get('/api/stream/:videoId', async (req, res) => {
       'Content-Type': 'video/mp4',
     });
 
-    ytdl(videoUrl, {
+    // تمرير الهيدرز بشكل صريح
+    const stream = ytdl(videoUrl, {
       format,
-      range: { start, end }
-    }).pipe(res);
+      range: { start, end },
+      requestOptions: {
+        headers: {
+          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
+          'Accept': req.headers['accept'] || '*/*',
+          'Referer': 'https://www.youtube.com/'
+        }
+      }
+    });
+
+    stream.on('error', err => {
+      if (err && err.message && err.message.includes('410')) {
+        console.error('410 error with format:', format.qualityLabel, format.url);
+      } else {
+        console.error('Streaming error:', err);
+      }
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream video', details: err.message, format });
+      }
+    });
+    stream.pipe(res);
 
   } catch (error) {
     console.error('Streaming error:', error);
