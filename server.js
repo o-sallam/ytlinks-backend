@@ -145,7 +145,18 @@ app.get('/api/stream/:videoId', async (req, res) => {
 
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const info = await ytdl.getInfo(videoUrl);
+    console.log('Getting video info for:', videoUrl);
+    let info;
+    try {
+      info = await ytdl.getInfo(videoUrl);
+    } catch (error) {
+      console.error('ytdl.getInfo error:', error);
+      return res.status(500).json({ error: 'Failed to get video info', details: error.message });
+    }
+    if (!info || !info.formats) {
+      console.error('No info or formats found:', info);
+      return res.status(500).json({ error: 'No formats found', details: info });
+    }
     let format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highest' });
     let videoSize = parseInt(format.contentLength || '0', 10);
 
