@@ -8,7 +8,11 @@ const app = express();
 
 // Enable CORS for all origins
 const corsOptions = {
-  origin: ["https://ytlinks-backend-production.up.railway.app", "http://localhost:3000"],
+  origin: [
+    "https://ytlinks-backend-production.up.railway.app",
+    "http://localhost:3000",
+    "https://ytlinks.vercel.app/"
+  ],
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"],
 };
