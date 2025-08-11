@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 const ytdl = require('ytdl-core');
+const play = require('play-dl');
 
 const app = express();
 
@@ -136,84 +137,14 @@ app.get('/api/video/:videoId', async (req, res) => {
 
 // Video streaming endpoint
 app.get('/api/stream/:videoId', async (req, res) => {
-  const { videoId } = req.params;
-  const range = req.headers.range;
-
-  if (!range) {
-    return res.status(400).send('Requires Range header');
-  }
-
   try {
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    console.log('Getting video info for:', videoUrl);
-    let info;
-    try {
-      info = await ytdl.getInfo(videoUrl);
-    } catch (error) {
-      console.error('ytdl.getInfo error:', error);
-      return res.status(500).json({ error: 'Failed to get video info', details: error.message });
-    }
-    if (!info || !info.formats) {
-      console.error('No info or formats found:', info);
-      return res.status(500).json({ error: 'No formats found', details: info });
-    }
-    let format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highest' });
-    let videoSize = parseInt(format.contentLength || '0', 10);
-
-    // fallback: جرّب فورمات أخرى لو الحجم غير متوفر أو حدث خطأ
-    if (!videoSize || !format.url) {
-      const fallbackFormat = info.formats.find(f => f.contentLength && f.mimeType && f.mimeType.includes('mp4') && f.qualityLabel && f.hasAudio && f.hasVideo);
-      if (fallbackFormat) {
-        format = fallbackFormat;
-        videoSize = parseInt(format.contentLength, 10);
-        console.warn('Using fallback format:', format.qualityLabel, format.mimeType);
-      }
-    }
-
-    if (!videoSize) {
-      return res.status(500).json({ error: 'Could not determine video size.', details: { format } });
-    }
-
-    const CHUNK_SIZE = 10 ** 6; // 1MB chunks
-    const start = Number(range.replace(/\D/g, ""));
-    const end = Math.min(start + CHUNK_SIZE - 1, videoSize - 1);
-    const contentLength = end - start + 1;
-
-    res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${videoSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': contentLength,
-      'Content-Type': 'video/mp4',
-    });
-
-    // تمرير الهيدرز بشكل صريح
-    const stream = ytdl(videoUrl, {
-      format,
-      range: { start, end },
-      requestOptions: {
-        headers: {
-          'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
-          'Accept': req.headers['accept'] || '*/*',
-          'Referer': 'https://www.youtube.com/'
-        }
-      }
-    });
-
-    stream.on('error', err => {
-      if (err && err.message && err.message.includes('410')) {
-        console.error('410 error with format:', format.qualityLabel, format.url);
-      } else {
-        console.error('Streaming error:', err);
-      }
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream video', details: err.message, format });
-      }
-    });
-    stream.pipe(res);
-
-  } catch (error) {
-    console.error('Streaming error:', error);
-    res.status(500).json({ error: 'Failed to stream video', details: error.message });
+    const videoUrl = `https://www.youtube.com/watch?v=${req.params.videoId}`;
+    const streamInfo = await play.stream(videoUrl, { quality: 2 }); // 2 = غالباً 720p
+    res.setHeader('Content-Type', 'video/mp4');
+    streamInfo.stream.pipe(res);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to stream video', details: err.message });
   }
 });
 
