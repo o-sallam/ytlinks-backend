@@ -137,15 +137,32 @@ app.get('/api/video/:videoId', async (req, res) => {
 
 // Video streaming endpoint
 app.get('/api/stream/:videoId', async (req, res) => {
-  try {
-    const videoUrl = `https://www.youtube.com/watch?v=${req.params.videoId}`;
-    const streamInfo = await play.stream(videoUrl, { quality: 2 }); // 2 = غالباً 720p
-    res.setHeader('Content-Type', 'video/mp4');
-    streamInfo.stream.pipe(res);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to stream video', details: err.message });
+  const videoUrl = `https://www.youtube.com/watch?v=${req.params.videoId}`;
+  let attempt = 0, maxAttempts = 2;
+
+  async function tryStream() {
+    try {
+      console.log(`Attempt ${attempt + 1} to stream: ${videoUrl}`);
+      const streamInfo = await play.stream(videoUrl, { quality: 2 });
+      res.setHeader('Content-Type', 'video/mp4');
+      streamInfo.stream.pipe(res);
+    } catch (err) {
+      console.error(`Streaming error on attempt ${attempt + 1}:`, err);
+      // If 410 or "not a bot"/temporary error, retry once
+      if (
+        attempt < maxAttempts &&
+        err.message &&
+        (err.message.includes('410') || err.message.toLowerCase().includes('bot') || err.message.toLowerCase().includes('expired') || err.message.toLowerCase().includes('temporar'))
+      ) {
+        attempt++;
+        console.log('Retrying stream...');
+        return tryStream();
+      }
+      res.status(500).json({ error: 'Failed to stream video', details: err.message });
+    }
   }
+
+  tryStream();
 });
 
 // Serve static assets in production
