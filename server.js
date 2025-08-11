@@ -148,7 +148,7 @@ app.get('/api/stream/:videoId', (req, res) => {
   console.log(`Spawning yt-dlp for: ${videoUrl}`);
 
   // yt-dlp command: best video+audio up to 720p, output to stdout
-  const ytDlp = spawn('yt-dlp', [
+  const ytDlp = spawn('/usr/local/bin/yt-dlp', [
     '-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]',
     '-o', '-',
     videoUrl

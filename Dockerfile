@@ -17,6 +17,11 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
+# Install ffmpeg and yt-dlp for YouTube streaming
+RUN apt-get update && apt-get install -y ffmpeg wget \
+    && wget -O /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
+
 # Copy the rest of the application code to the working directory
 COPY . .
 
