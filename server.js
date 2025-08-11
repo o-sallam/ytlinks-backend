@@ -136,33 +136,47 @@ app.get('/api/video/:videoId', async (req, res) => {
 });
 
 // Video streaming endpoint
-app.get('/api/stream/:videoId', async (req, res) => {
-  const videoUrl = `https://www.youtube.com/watch?v=${req.params.videoId}`;
-  let attempt = 0, maxAttempts = 2;
+const { spawn } = require('child_process');
 
-  async function tryStream() {
-    try {
-      console.log(`Attempt ${attempt + 1} to stream: ${videoUrl}`);
-      const streamInfo = await play.stream(videoUrl, { quality: 2 });
-      res.setHeader('Content-Type', 'video/mp4');
-      streamInfo.stream.pipe(res);
-    } catch (err) {
-      console.error(`Streaming error on attempt ${attempt + 1}:`, err);
-      // If 410 or "not a bot"/temporary error, retry once
-      if (
-        attempt < maxAttempts &&
-        err.message &&
-        (err.message.includes('410') || err.message.toLowerCase().includes('bot') || err.message.toLowerCase().includes('expired') || err.message.toLowerCase().includes('temporar'))
-      ) {
-        attempt++;
-        console.log('Retrying stream...');
-        return tryStream();
-      }
-      res.status(500).json({ error: 'Failed to stream video', details: err.message });
-    }
+app.get('/api/stream/:videoId', (req, res) => {
+  const { videoId } = req.params;
+  console.log('Requested videoId:', videoId);
+  if (!videoId || typeof videoId !== 'string' || videoId.trim() === '' || videoId === 'undefined') {
+    return res.status(400).json({ error: 'Invalid or missing videoId', details: videoId });
   }
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  console.log(`Spawning yt-dlp for: ${videoUrl}`);
 
-  tryStream();
+  // yt-dlp command: best video+audio up to 720p, output to stdout
+  const ytDlp = spawn('yt-dlp', [
+    '-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+    '-o', '-',
+    videoUrl
+  ]);
+
+  res.setHeader('Content-Type', 'video/mp4');
+
+  ytDlp.stdout.pipe(res);
+
+  ytDlp.stderr.on('data', data => {
+    console.error('yt-dlp error:', data.toString());
+  });
+
+  ytDlp.on('error', err => {
+    console.error('Failed to start yt-dlp:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to start yt-dlp', details: err.message });
+    }
+  });
+
+  ytDlp.on('close', code => {
+    if (code !== 0) {
+      console.error(`yt-dlp exited with code ${code}`);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'yt-dlp failed', code });
+      }
+    }
+  });
 });
 
 // Serve static assets in production
