@@ -137,87 +137,42 @@ app.get('/api/video/:videoId', async (req, res) => {
 // Video streaming endpoint
 app.get('/api/stream/:videoId', async (req, res) => {
   const { videoId } = req.params;
-  const { start } = req.query;
-  
-  if (!videoId) {
-    return res.status(400).json({ error: 'Video ID is required' });
+  const range = req.headers.range;
+
+  if (!range) {
+    return res.status(400).send('Requires Range header');
   }
-  
+
   try {
-    console.log(`Starting video stream setup for videoId: ${videoId}`);
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    
-    console.log('Fetching video info...');
     const info = await ytdl.getInfo(videoUrl);
-    console.log('Video info fetched successfully');
-    
-    // Try different format selection strategies
-    let format;
-    try {
-      // First try: highest quality with both audio and video
-      format = ytdl.chooseFormat(info.formats, { 
-        quality: 'highest',
-        filter: 'audioandvideo'
-      });
-    } catch (formatError) {
-      console.log('Failed to get highest quality format, trying alternative...');
-      // Second try: any format with both audio and video
-      const formats = ytdl.filterFormats(info.formats, 'audioandvideo');
-      format = formats[0];
-      
-      if (!format) {
-        // Last resort: try separate audio and video streams
-        format = ytdl.chooseFormat(info.formats, { quality: 'highest' });
-      }
+    const format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highest' });
+
+    // contentLength may be undefined for some formats, fallback to 0 if not available
+    const videoSize = parseInt(format.contentLength || '0', 10);
+    if (!videoSize) {
+      return res.status(500).json({ error: 'Could not determine video size.' });
     }
-    
-    console.log('Selected format:', format.qualityLabel);
-    
-    // Set response headers
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    
-    console.log('Creating video stream...');
-    const streamOptions = {
-      format: format,
-      begin: start ? `${start}s` : '0s',
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-      },
-      range: { start: 0 }
-    };
-    
-    const stream = ytdl(videoUrl, streamOptions);
-    
-    stream.on('info', (info, format) => {
-      console.log('Stream info received');
+    const CHUNK_SIZE = 10 ** 6; // 1MB chunks
+    const start = Number(range.replace(/\D/g, ""));
+    const end = Math.min(start + CHUNK_SIZE - 1, videoSize - 1);
+    const contentLength = end - start + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${videoSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': contentLength,
+      'Content-Type': 'video/mp4',
     });
-    
-    stream.on('progress', (chunkLength, downloaded, total) => {
-      console.log(`Progress: ${(downloaded / total * 100).toFixed(2)}%`);
-    });
-    
-    stream.pipe(res);
-    
-    stream.on('error', (error) => {
-      console.error('Streaming error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ 
-          error: 'Failed to stream video', 
-          details: error.message,
-          format: format.qualityLabel 
-        });
-      }
-    });
-    
+
+    ytdl(videoUrl, {
+      format,
+      range: { start, end }
+    }).pipe(res);
+
   } catch (error) {
-    console.error('Error setting up video stream:', error);
-    res.status(500).json({ 
-      error: 'Failed to setup video stream', 
-      details: error.message 
-    });
+    console.error('Streaming error:', error);
+    res.status(500).json({ error: 'Failed to stream video', details: error.message });
   }
 });
 
