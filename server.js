@@ -220,6 +220,7 @@ app.all("/api/stream/:videoId", async (req, res) => {
     // Download video if not cached
     if (!fs.existsSync(videoPath)) {
       console.log("Downloading video with yt-dlp...");
+      let ytDlpStderr = "";
       await new Promise((resolve, reject) => {
         const ytDlp = spawn("yt-dlp", [
           "-f",
@@ -228,12 +229,21 @@ app.all("/api/stream/:videoId", async (req, res) => {
           videoPath,
           `https://www.youtube.com/watch?v=${videoId}`,
         ]);
+        ytDlp.stderr.on("data", (d) => {
+          const msg = d.toString();
+          ytDlpStderr += msg;
+          console.error("yt-dlp:", msg);
+        });
         ytDlp.on("close", (code) => {
           if (code === 0) resolve();
-          else reject(new Error("yt-dlp failed, exit code: " + code));
+          else reject(new Error("yt-dlp failed, exit code: " + code + ", stderr: " + ytDlpStderr));
         });
-        ytDlp.stderr.on("data", (d) => console.error("yt-dlp:", d.toString()));
       });
+    }
+
+    // تحقق من وجود الملف فعلاً قبل القراءة
+    if (!fs.existsSync(videoPath)) {
+      throw new Error("Video file was not downloaded. yt-dlp failed or video is unavailable.");
     }
 
     // Serve video with Range support
