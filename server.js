@@ -167,15 +167,40 @@ app.get("/api/video/:videoId", async (req, res) => {
 // Video streaming endpoint
 
 app.all("/api/stream/:videoId", async (req, res) => {
-  // Always set CORS header for all responses (adjust origin as needed)
   res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
   res.setHeader("Vary", "Origin");
-
   const { videoId } = req.params;
   const range = req.headers.range;
+  try {
+    // Support HEAD requests for duration header
+    if (req.method === "HEAD") {
+      let durationSeconds = null;
+      try {
+        durationSeconds = await getVideoDuration(videoId);
+        if (durationSeconds) {
+          res.setHeader("X-Video-Duration", durationSeconds.toString());
+        }
+      } catch (e) {
+        console.error("Failed to get video duration from Puppeteer:", e);
+      }
+      return res.status(200).end();
+    }
 
-  // Support HEAD requests for duration header
-  if (req.method === "HEAD") {
+    if (
+      !videoId ||
+      typeof videoId !== "string" ||
+      videoId.trim() === "" ||
+      videoId === "undefined"
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Invalid or missing videoId", details: videoId });
+    }
+    if (!range) {
+      return res.status(416).send("Range header required");
+    }
+
+    // Get duration from Puppeteer
     let durationSeconds = null;
     try {
       durationSeconds = await getVideoDuration(videoId);
@@ -185,81 +210,60 @@ app.all("/api/stream/:videoId", async (req, res) => {
     } catch (e) {
       console.error("Failed to get video duration from Puppeteer:", e);
     }
-    return res.status(200).end();
-  }
 
-  if (
-    !videoId ||
-    typeof videoId !== "string" ||
-    videoId.trim() === "" ||
-    videoId === "undefined"
-  ) {
-    return res
-      .status(400)
-      .json({ error: "Invalid or missing videoId", details: videoId });
-  }
-  if (!range) {
-    return res.status(416).send("Range header required");
-  }
-
-  // Get duration from Puppeteer
-  let durationSeconds = null;
-  try {
-    durationSeconds = await getVideoDuration(videoId);
-    if (durationSeconds) {
-      res.setHeader("X-Video-Duration", durationSeconds.toString());
+    // Prepare local file path (cache)
+    const videoPath = path.resolve(__dirname, "video_cache", `${videoId}.mp4`);
+    if (!fs.existsSync(path.dirname(videoPath))) {
+      fs.mkdirSync(path.dirname(videoPath));
     }
-  } catch (e) {
-    console.error("Failed to get video duration from Puppeteer:", e);
-  }
 
-  // Prepare local file path (cache)
-  const videoPath = path.resolve(__dirname, "video_cache", `${videoId}.mp4`);
-  if (!fs.existsSync(path.dirname(videoPath))) {
-    fs.mkdirSync(path.dirname(videoPath));
-  }
-
-  // Download video if not cached
-  if (!fs.existsSync(videoPath)) {
-    console.log("Downloading video with yt-dlp...");
-    await new Promise((resolve, reject) => {
-      const ytDlp = spawn("yt-dlp", [
-        "-f",
-        "bestvideo[height<=720]+bestaudio/best[height<=720]",
-        "-o",
-        videoPath,
-        `https://www.youtube.com/watch?v=${videoId}`,
-      ]);
-      ytDlp.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error("yt-dlp failed"));
+    // Download video if not cached
+    if (!fs.existsSync(videoPath)) {
+      console.log("Downloading video with yt-dlp...");
+      await new Promise((resolve, reject) => {
+        const ytDlp = spawn("yt-dlp", [
+          "-f",
+          "bestvideo[height<=720]+bestaudio/best[height<=720]",
+          "-o",
+          videoPath,
+          `https://www.youtube.com/watch?v=${videoId}`,
+        ]);
+        ytDlp.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error("yt-dlp failed, exit code: " + code));
+        });
+        ytDlp.stderr.on("data", (d) => console.error("yt-dlp:", d.toString()));
       });
-      ytDlp.stderr.on("data", (d) => console.error("yt-dlp:", d.toString()));
+    }
+
+    // Serve video with Range support
+    const videoSize = fs.statSync(videoPath).size;
+    const CHUNK_SIZE = 1 * 1e6;
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1]
+      ? parseInt(parts[1], 10)
+      : Math.min(start + CHUNK_SIZE, videoSize - 1);
+    const contentLength = end - start + 1;
+
+    res.writeHead(206, {
+      "Content-Range": `bytes ${start}-${end}/${videoSize}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": contentLength,
+      "Content-Type": "video/mp4",
+      ...(durationSeconds && { "X-Video-Duration": durationSeconds.toString() }),
+      "Access-Control-Allow-Origin": "http://localhost:3000",
+      "Vary": "Origin"
     });
+
+    const stream = fs.createReadStream(videoPath, { start, end });
+    stream.pipe(res);
+  } catch (err) {
+    console.error("Fatal error in /api/stream/:videoId:", err);
+    res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
+    res.setHeader("Vary", "Origin");
+    res.status(500).json({ error: "Internal server error", details: err.message || err.toString() });
   }
-
-  // Serve video with Range support
-  const videoSize = fs.statSync(videoPath).size;
-  const CHUNK_SIZE = 1 * 1e6;
-  const parts = range.replace(/bytes=/, "").split("-");
-  const start = parseInt(parts[0], 10);
-  const end = parts[1]
-    ? parseInt(parts[1], 10)
-    : Math.min(start + CHUNK_SIZE, videoSize - 1);
-  const contentLength = end - start + 1;
-
-  res.writeHead(206, {
-    "Content-Range": `bytes ${start}-${end}/${videoSize}`,
-    "Accept-Ranges": "bytes",
-    "Content-Length": contentLength,
-    "Content-Type": "video/mp4",
-    ...(durationSeconds && { "X-Video-Duration": durationSeconds.toString() }),
-    "Access-Control-Allow-Origin": "http://localhost:3000",
-    "Vary": "Origin"
-  });
-
-  const stream = fs.createReadStream(videoPath, { start, end });
-  stream.pipe(res);
 });
 
 // Serve static assets in production
