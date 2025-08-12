@@ -211,63 +211,52 @@ app.all("/api/stream/:videoId", async (req, res) => {
       console.error("Failed to get video duration from Puppeteer:", e);
     }
 
-    // Prepare local file path (cache)
-    const videoPath = path.resolve(__dirname, "video_cache", `${videoId}.mp4`);
-    if (!fs.existsSync(path.dirname(videoPath))) {
-      fs.mkdirSync(path.dirname(videoPath));
-    }
+    // Stream YouTube video directly using ytdl-core
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const ytdlOptions = {
+      quality: 'highest',
+      filter: (format) => format.container === 'mp4',
+      requestOptions: {},
+    };
 
-    // Download video if not cached
-    if (!fs.existsSync(videoPath)) {
-      console.log("Downloading video with yt-dlp...");
-      let ytDlpStderr = "";
-      await new Promise((resolve, reject) => {
-        const ytDlp = spawn("yt-dlp", [
-          "-f",
-          "bestvideo[height<=720]+bestaudio/best[height<=720]",
-          "-o",
-          videoPath,
-          `https://www.youtube.com/watch?v=${videoId}`,
-        ]);
-        ytDlp.stderr.on("data", (d) => {
-          const msg = d.toString();
-          ytDlpStderr += msg;
-          console.error("yt-dlp:", msg);
-        });
-        ytDlp.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error("yt-dlp failed, exit code: " + code + ", stderr: " + ytDlpStderr));
-        });
+    // If Range header is present, parse it for partial content
+    let start = 0, end = null;
+    if (range) {
+      const sizeEstimate = 10 * 1024 * 1024 * 1024; // 10GB fallback (real size unknown)
+      const parts = range.replace(/bytes=/, '').split('-');
+      start = parseInt(parts[0], 10);
+      end = parts[1] ? parseInt(parts[1], 10) : null;
+      const contentLength = end ? (end - start + 1) : undefined;
+      res.status(206);
+      res.set({
+        'Content-Range': `bytes ${start}-${end ? end : ''}/${end ? end + 1 : '*'}`,
+        'Accept-Ranges': 'bytes',
+        ...(contentLength && { 'Content-Length': contentLength }),
+        'Content-Type': 'video/mp4',
+        ...(durationSeconds && { 'X-Video-Duration': durationSeconds.toString() }),
+        'Access-Control-Allow-Origin': 'http://localhost:3000',
+        'Vary': 'Origin'
+      });
+      ytdlOptions.range = { start, end };
+    } else {
+      res.set({
+        'Content-Type': 'video/mp4',
+        ...(durationSeconds && { 'X-Video-Duration': durationSeconds.toString() }),
+        'Access-Control-Allow-Origin': 'http://localhost:3000',
+        'Vary': 'Origin'
       });
     }
 
-    // تحقق من وجود الملف فعلاً قبل القراءة
-    if (!fs.existsSync(videoPath)) {
-      throw new Error("Video file was not downloaded. yt-dlp failed or video is unavailable.");
-    }
-
-    // Serve video with Range support
-    const videoSize = fs.statSync(videoPath).size;
-    const CHUNK_SIZE = 1 * 1e6;
-    const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1]
-      ? parseInt(parts[1], 10)
-      : Math.min(start + CHUNK_SIZE, videoSize - 1);
-    const contentLength = end - start + 1;
-
-    res.writeHead(206, {
-      "Content-Range": `bytes ${start}-${end}/${videoSize}`,
-      "Accept-Ranges": "bytes",
-      "Content-Length": contentLength,
-      "Content-Type": "video/mp4",
-      ...(durationSeconds && { "X-Video-Duration": durationSeconds.toString() }),
-      "Access-Control-Allow-Origin": "http://localhost:3000",
-      "Vary": "Origin"
+    const ytdlStream = ytdl(videoUrl, ytdlOptions);
+    ytdlStream.on('error', (err) => {
+      console.error('ytdl-core error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream video', details: err.message });
+      } else {
+        res.destroy();
+      }
     });
-
-    const stream = fs.createReadStream(videoPath, { start, end });
-    stream.pipe(res);
+    ytdlStream.pipe(res);
   } catch (err) {
     console.error("Fatal error in /api/stream/:videoId:", err);
     res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
