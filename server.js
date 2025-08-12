@@ -165,10 +165,6 @@ app.get("/api/video/:videoId", async (req, res) => {
 });
 
 // Video streaming endpoint
-const fs = require("fs");
-const path = require("path");
-const { spawn } = require("child_process");
-const getVideoDuration = require("./utils/getVideoDuration");
 
 app.get("/api/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
