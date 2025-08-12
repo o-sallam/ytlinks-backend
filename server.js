@@ -166,9 +166,28 @@ app.get("/api/video/:videoId", async (req, res) => {
 
 // Video streaming endpoint
 
-app.get("/api/stream/:videoId", async (req, res) => {
+app.all("/api/stream/:videoId", async (req, res) => {
+  // Always set CORS header for all responses (adjust origin as needed)
+  res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
+  res.setHeader("Vary", "Origin");
+
   const { videoId } = req.params;
   const range = req.headers.range;
+
+  // Support HEAD requests for duration header
+  if (req.method === "HEAD") {
+    let durationSeconds = null;
+    try {
+      durationSeconds = await getVideoDuration(videoId);
+      if (durationSeconds) {
+        res.setHeader("X-Video-Duration", durationSeconds.toString());
+      }
+    } catch (e) {
+      console.error("Failed to get video duration from Puppeteer:", e);
+    }
+    return res.status(200).end();
+  }
+
   if (
     !videoId ||
     typeof videoId !== "string" ||
@@ -235,6 +254,8 @@ app.get("/api/stream/:videoId", async (req, res) => {
     "Content-Length": contentLength,
     "Content-Type": "video/mp4",
     ...(durationSeconds && { "X-Video-Duration": durationSeconds.toString() }),
+    "Access-Control-Allow-Origin": "http://localhost:3000",
+    "Vary": "Origin"
   });
 
   const stream = fs.createReadStream(videoPath, { start, end });
