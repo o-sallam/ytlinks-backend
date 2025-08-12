@@ -219,33 +219,23 @@ app.all("/api/stream/:videoId", async (req, res) => {
       requestOptions: {},
     };
 
-    // If Range header is present, parse it for partial content
+    // Parse Range header for partial content
     let start = 0, end = null;
-    if (range) {
-      const sizeEstimate = 10 * 1024 * 1024 * 1024; // 10GB fallback (real size unknown)
-      const parts = range.replace(/bytes=/, '').split('-');
-      start = parseInt(parts[0], 10);
-      end = parts[1] ? parseInt(parts[1], 10) : null;
-      const contentLength = end ? (end - start + 1) : undefined;
-      res.status(206);
-      res.set({
-        'Content-Range': `bytes ${start}-${end ? end : ''}/${end ? end + 1 : '*'}`,
-        'Accept-Ranges': 'bytes',
-        ...(contentLength && { 'Content-Length': contentLength }),
-        'Content-Type': 'video/mp4',
-        ...(durationSeconds && { 'X-Video-Duration': durationSeconds.toString() }),
-        'Access-Control-Allow-Origin': 'http://localhost:3000',
-        'Vary': 'Origin'
-      });
-      ytdlOptions.range = { start, end };
-    } else {
-      res.set({
-        'Content-Type': 'video/mp4',
-        ...(durationSeconds && { 'X-Video-Duration': durationSeconds.toString() }),
-        'Access-Control-Allow-Origin': 'http://localhost:3000',
-        'Vary': 'Origin'
-      });
-    }
+    const parts = range.replace(/bytes=/, '').split('-');
+    start = parseInt(parts[0], 10);
+    end = parts[1] ? parseInt(parts[1], 10) : null;
+    const contentLength = end ? (end - start + 1) : undefined;
+    res.status(206);
+    res.set({
+      'Content-Range': `bytes ${start}-${end ? end : ''}/${end ? end + 1 : '*'}`,
+      'Accept-Ranges': 'bytes',
+      ...(contentLength && { 'Content-Length': contentLength }),
+      'Content-Type': 'video/mp4',
+      ...(durationSeconds && { 'X-Video-Duration': durationSeconds.toString() }),
+      'Access-Control-Allow-Origin': 'http://localhost:3000',
+      'Vary': 'Origin'
+    });
+    ytdlOptions.range = { start, end };
 
     const ytdlStream = ytdl(videoUrl, ytdlOptions);
     ytdlStream.on('error', (err) => {
