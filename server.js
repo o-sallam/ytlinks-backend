@@ -172,20 +172,10 @@ app.all("/api/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
   const range = req.headers.range;
   try {
-    // Support HEAD requests for duration header
+    // HEAD requests: just respond OK for preflight, no duration
     if (req.method === "HEAD") {
-      let durationSeconds = null;
-      try {
-        durationSeconds = await getVideoDuration(videoId);
-        if (durationSeconds) {
-          res.setHeader("X-Video-Duration", durationSeconds.toString());
-        }
-      } catch (e) {
-        console.error("Failed to get video duration from Puppeteer:", e);
-      }
       return res.status(200).end();
     }
-
     if (
       !videoId ||
       typeof videoId !== "string" ||
@@ -198,17 +188,6 @@ app.all("/api/stream/:videoId", async (req, res) => {
     }
     if (!range) {
       return res.status(416).send("Range header required");
-    }
-
-    // Get duration from Puppeteer
-    let durationSeconds = null;
-    try {
-      durationSeconds = await getVideoDuration(videoId);
-      if (durationSeconds) {
-        res.setHeader("X-Video-Duration", durationSeconds.toString());
-      }
-    } catch (e) {
-      console.error("Failed to get video duration from Puppeteer:", e);
     }
 
     // Stream YouTube video directly using ytdl-core
@@ -231,7 +210,6 @@ app.all("/api/stream/:videoId", async (req, res) => {
       'Accept-Ranges': 'bytes',
       ...(contentLength && { 'Content-Length': contentLength }),
       'Content-Type': 'video/mp4',
-      ...(durationSeconds && { 'X-Video-Duration': durationSeconds.toString() }),
       'Access-Control-Allow-Origin': 'http://localhost:3000',
       'Vary': 'Origin'
     });
