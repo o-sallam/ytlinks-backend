@@ -6,11 +6,6 @@ const play = require("play-dl");
 
 const app = express();
 
-const fs = require("fs");
-const path = require("path");
-const { spawn } = require("child_process");
-const getVideoDuration = require("./utils/getVideoDuration");
-
 // Enable CORS for all origins
 const corsOptions = {
   origin: [
@@ -165,80 +160,58 @@ app.get("/api/video/:videoId", async (req, res) => {
 });
 
 // Video streaming endpoint
+const { spawn } = require("child_process");
 
-app.all("/api/stream/:videoId", async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
-  res.setHeader("Vary", "Origin");
+app.get("/api/stream/:videoId", (req, res) => {
   const { videoId } = req.params;
-  const range = req.headers.range;
-  try {
-    // HEAD requests: just respond OK for preflight, no duration
-    if (req.method === "HEAD") {
-      return res.status(200).end();
-    }
-    if (
-      !videoId ||
-      typeof videoId !== "string" ||
-      videoId.trim() === "" ||
-      videoId === "undefined"
-    ) {
-      return res
-        .status(400)
-        .json({ error: "Invalid or missing videoId", details: videoId });
-    }
-    if (!range) {
-      return res.status(416).send("Range header required");
-    }
-
-    // Stream YouTube video directly using ytdl-core
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const ytdlOptions = {
-      quality: 'highest',
-      filter: (format) => format.container === 'mp4',
-      requestOptions: {},
-    };
-
-    // Parse Range header for partial content
-    let start = 0, end = null;
-    const parts = range.replace(/bytes=/, '').split('-');
-    start = parseInt(parts[0], 10);
-    end = parts[1] ? parseInt(parts[1], 10) : null;
-    const contentLength = end ? (end - start + 1) : undefined;
-    res.status(206);
-    res.set({
-      'Content-Range': `bytes ${start}-${end ? end : ''}/${end ? end + 1 : '*'}`,
-      'Accept-Ranges': 'bytes',
-      ...(contentLength && { 'Content-Length': contentLength }),
-      'Content-Type': 'video/mp4',
-      'Access-Control-Allow-Origin': 'http://localhost:3000',
-      'Vary': 'Origin'
-    });
-    ytdlOptions.range = { start, end };
-
-    const ytdlStream = ytdl(videoUrl, ytdlOptions);
-    ytdlStream.on('error', (err) => {
-      console.error('ytdl-core error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream video', details: err.message });
-      } else {
-        res.destroy();
-      }
-    });
-    ytdlStream.pipe(res);
-  } catch (err) {
-    console.error("Fatal error in /api/stream/:videoId:", err);
-    console.error("[STREAM ERROR LOG]", {
-      method: req.method,
-      videoId: req.params?.videoId,
-      headers: req.headers,
-      error: err && (err.stack || err.message || err.toString()),
-      statusCode: err && err.statusCode,
-      time: new Date().toISOString()
-    });
-    res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
-    res.setHeader("Vary", "Origin");
-    res.status(500).json({ error: "Internal server error", details: err.message || err.toString() });
+  console.log("Requested videoId:", videoId);
+  if (
+    !videoId ||
+    typeof videoId !== "string" ||
+    videoId.trim() === "" ||
+    videoId === "undefined"
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Invalid or missing videoId", details: videoId });
   }
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  console.log(`Spawning yt-dlp for: ${videoUrl}`);
+
+  // yt-dlp command: best video+audio up to 720p, output to stdout
+  const ytDlp = spawn("/usr/local/bin/yt-dlp", [
+    "-f",
+    "bestvideo[height<=720]+bestaudio/best[height<=720]",
+    "-o",
+    "-",
+    videoUrl,
+  ]);
+
+  res.setHeader("Content-Type", "video/mp4");
+
+  ytDlp.stdout.pipe(res);
+
+  ytDlp.stderr.on("data", (data) => {
+    console.error("yt-dlp error:", data.toString());
+  });
+
+  ytDlp.on("error", (err) => {
+    console.error("Failed to start yt-dlp:", err);
+    if (!res.headersSent) {
+      res
+        .status(500)
+        .json({ error: "Failed to start yt-dlp", details: err.message });
+    }
+  });
+
+  ytDlp.on("close", (code) => {
+    if (code !== 0) {
+      console.error(`yt-dlp exited with code ${code}`);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "yt-dlp failed", code });
+      }
+    }
+  });
 });
 
 // Serve static assets in production
