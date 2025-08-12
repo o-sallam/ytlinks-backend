@@ -249,6 +249,14 @@ app.all("/api/stream/:videoId", async (req, res) => {
     ytdlStream.pipe(res);
   } catch (err) {
     console.error("Fatal error in /api/stream/:videoId:", err);
+    console.error("[STREAM ERROR LOG]", {
+      method: req.method,
+      videoId: req.params?.videoId,
+      headers: req.headers,
+      error: err && (err.stack || err.message || err.toString()),
+      statusCode: err && err.statusCode,
+      time: new Date().toISOString()
+    });
     res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
     res.setHeader("Vary", "Origin");
     res.status(500).json({ error: "Internal server error", details: err.message || err.toString() });
