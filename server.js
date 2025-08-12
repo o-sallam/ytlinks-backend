@@ -6,6 +6,11 @@ const play = require("play-dl");
 
 const app = express();
 
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const getVideoDuration = require("./utils/getVideoDuration");
+
 // Enable CORS for all origins
 const corsOptions = {
   origin: [
@@ -160,13 +165,14 @@ app.get("/api/video/:videoId", async (req, res) => {
 });
 
 // Video streaming endpoint
+const fs = require("fs");
+const path = require("path");
 const { spawn } = require("child_process");
+const getVideoDuration = require("./utils/getVideoDuration");
 
-const { exec } = require("child_process");
-
-app.get("/api/stream/:videoId", (req, res) => {
+app.get("/api/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
-  console.log("Requested videoId:", videoId);
+  const range = req.headers.range;
   if (
     !videoId ||
     typeof videoId !== "string" ||
@@ -177,49 +183,66 @@ app.get("/api/stream/:videoId", (req, res) => {
       .status(400)
       .json({ error: "Invalid or missing videoId", details: videoId });
   }
-  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  console.log(`Spawning yt-dlp for: ${videoUrl}`);
+  if (!range) {
+    return res.status(416).send("Range header required");
+  }
 
-  // Get duration using yt-dlp --get-duration
-  exec(`/usr/local/bin/yt-dlp --get-duration ${videoUrl}`,(err, stdout) => {
-    if (!err && stdout) {
-      res.setHeader("X-Video-Duration", stdout.trim());
+  // Get duration from Puppeteer
+  let durationSeconds = null;
+  try {
+    durationSeconds = await getVideoDuration(videoId);
+    if (durationSeconds) {
+      res.setHeader("X-Video-Duration", durationSeconds.toString());
     }
-    // yt-dlp command: best video+audio up to 720p, output to stdout
-    const ytDlp = spawn("/usr/local/bin/yt-dlp", [
-      "-f",
-      "bestvideo[height<=720]+bestaudio/best[height<=720]",
-      "-o",
-      "-",
-      videoUrl,
-    ]);
+  } catch (e) {
+    console.error("Failed to get video duration from Puppeteer:", e);
+  }
 
-    res.setHeader("Content-Type", "video/mp4");
+  // Prepare local file path (cache)
+  const videoPath = path.resolve(__dirname, "video_cache", `${videoId}.mp4`);
+  if (!fs.existsSync(path.dirname(videoPath))) {
+    fs.mkdirSync(path.dirname(videoPath));
+  }
 
-    ytDlp.stdout.pipe(res);
-
-    ytDlp.stderr.on("data", (data) => {
-      console.error("yt-dlp error:", data.toString());
+  // Download video if not cached
+  if (!fs.existsSync(videoPath)) {
+    console.log("Downloading video with yt-dlp...");
+    await new Promise((resolve, reject) => {
+      const ytDlp = spawn("yt-dlp", [
+        "-f",
+        "bestvideo[height<=720]+bestaudio/best[height<=720]",
+        "-o",
+        videoPath,
+        `https://www.youtube.com/watch?v=${videoId}`,
+      ]);
+      ytDlp.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error("yt-dlp failed"));
+      });
+      ytDlp.stderr.on("data", (d) => console.error("yt-dlp:", d.toString()));
     });
+  }
 
-    ytDlp.on("error", (err) => {
-      console.error("Failed to start yt-dlp:", err);
-      if (!res.headersSent) {
-        res
-          .status(500)
-          .json({ error: "Failed to start yt-dlp", details: err.message });
-      }
-    });
+  // Serve video with Range support
+  const videoSize = fs.statSync(videoPath).size;
+  const CHUNK_SIZE = 1 * 1e6;
+  const parts = range.replace(/bytes=/, "").split("-");
+  const start = parseInt(parts[0], 10);
+  const end = parts[1]
+    ? parseInt(parts[1], 10)
+    : Math.min(start + CHUNK_SIZE, videoSize - 1);
+  const contentLength = end - start + 1;
 
-    ytDlp.on("close", (code) => {
-      if (code !== 0) {
-        console.error(`yt-dlp exited with code ${code}`);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "yt-dlp failed", code });
-        }
-      }
-    });
+  res.writeHead(206, {
+    "Content-Range": `bytes ${start}-${end}/${videoSize}`,
+    "Accept-Ranges": "bytes",
+    "Content-Length": contentLength,
+    "Content-Type": "video/mp4",
+    ...(durationSeconds && { "X-Video-Duration": durationSeconds.toString() }),
   });
+
+  const stream = fs.createReadStream(videoPath, { start, end });
+  stream.pipe(res);
 });
 
 // Serve static assets in production
