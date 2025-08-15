@@ -1,12 +1,5 @@
-# Use a newer Node.js image based on Debian Bookworm
-FROM node:20-bookworm
-
-# Install Chromium and its dependencies
-RUN apt-get update && apt-get install -y chromium chromium-sandbox \
-    ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 \
-    libatk1.0-0 libcups2 libdbus-1-3 libgdk-pixbuf2.0-0 libnspr4 libnss3 \
-    libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 xdg-utils --no-install-recommends \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Use Node.js LTS image
+FROM node:20-alpine
 
 # Set the working directory in the container
 WORKDIR /app
@@ -17,19 +10,11 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
-# Install ffmpeg and yt-dlp for YouTube streaming
-RUN apt-get update && apt-get install -y ffmpeg wget \
-    && wget -O /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
-
 # Copy the rest of the application code to the working directory
 COPY . .
 
-# Set Puppeteer to use the installed Chromium
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
 # Expose the port the app runs on
-EXPOSE 3000
+EXPOSE 5000
 
 # Start the application
 CMD ["node", "server.js"]
