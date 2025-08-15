@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const ytdl = require("ytdl-core");
 const play = require("play-dl");
 
 const app = express();
@@ -117,7 +118,7 @@ app.get("/api/video/:videoId", async (req, res) => {
   }
 });
 
-// Video streaming endpoint using play-dl
+// Video streaming endpoint - Alternative approach using play-dl
 app.get("/api/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
   console.log("Requested videoId:", videoId);
@@ -135,62 +136,137 @@ app.get("/api/stream/:videoId", async (req, res) => {
 
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    console.log(`Streaming video: ${videoUrl}`);
+    console.log(`Getting stream info for: ${videoUrl}`);
 
-    // Get stream info using play-dl
-    const stream = await play.stream(videoUrl, {
-      quality: 2, // 0 = lowest, 1 = medium, 2 = highest available
-    });
+    // Get video info first
+    const videoInfo = await play.video_info(videoUrl);
+    console.log(`Video info retrieved: ${videoInfo.video_details.title}`);
 
-    if (!stream || !stream.stream) {
-      return res
-        .status(404)
-        .json({ error: "No stream available for this video" });
+    // Find the best available format
+    let bestFormat = null;
+
+    // Try to find MP4 format with both video and audio
+    for (const format of videoInfo.format) {
+      if (
+        format.mimeType &&
+        format.mimeType.includes("mp4") &&
+        format.hasVideo &&
+        format.hasAudio
+      ) {
+        bestFormat = format;
+        break;
+      }
     }
 
-    // Set appropriate headers
-    res.setHeader("Content-Type", "video/mp4");
+    // If no MP4 with both, try any format with both video and audio
+    if (!bestFormat) {
+      for (const format of videoInfo.format) {
+        if (format.hasVideo && format.hasAudio) {
+          bestFormat = format;
+          break;
+        }
+      }
+    }
+
+    if (!bestFormat) {
+      console.log("No suitable format found");
+      return res.status(404).json({ error: "No suitable video format found" });
+    }
+
+    console.log(
+      `Selected format: ${bestFormat.mimeType} - ${bestFormat.quality}`
+    );
+
+    // Set headers based on format
+    const mimeType = bestFormat.mimeType || "video/mp4";
+    res.setHeader("Content-Type", mimeType);
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
 
-    console.log(`Streaming format: ${stream.type} quality: ${stream.quality}`);
+    // Get the direct stream URL
+    const streamUrl = bestFormat.url;
+    console.log("Stream URL obtained, redirecting...");
 
-    // Handle client disconnect
-    req.on("close", () => {
-      console.log("Client disconnected, destroying stream");
-      if (stream.stream && typeof stream.stream.destroy === "function") {
-        stream.stream.destroy();
-      }
-    });
-
-    // Pipe the stream to response
-    stream.stream.pipe(res);
-
-    stream.stream.on("error", (err) => {
-      console.error("Stream error:", err);
-      if (!res.headersSent) {
-        res
-          .status(500)
-          .json({ error: "Streaming failed", details: err.message });
-      }
-    });
+    // Redirect to the direct stream URL
+    res.redirect(302, streamUrl);
   } catch (error) {
     console.error("Error streaming video:", error);
+    console.error("Error details:", error.stack);
+
     if (!res.headersSent) {
-      // More specific error messages
       if (
         error.message.includes("Video unavailable") ||
         error.message.includes("not found")
       ) {
         res.status(404).json({ error: "Video not found or unavailable" });
-      } else if (error.message.includes("No stream")) {
-        res.status(400).json({ error: "No suitable video format found" });
+      } else if (error.message.includes("private")) {
+        res.status(403).json({ error: "Video is private" });
       } else {
         res
           .status(500)
           .json({ error: "Failed to stream video", details: error.message });
       }
     }
+  }
+});
+
+// Get direct stream URL
+app.get("/api/stream-url/:videoId", async (req, res) => {
+  const { videoId } = req.params;
+
+  if (!videoId) {
+    return res.status(400).json({ error: "Video ID is required" });
+  }
+
+  try {
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    console.log(`Getting stream URL for: ${videoUrl}`);
+
+    // Get video info using play-dl
+    const videoInfo = await play.video_info(videoUrl);
+
+    // Find the best available format
+    let bestFormat = null;
+
+    // Try to find MP4 format with both video and audio, preferring higher quality
+    const mp4Formats = videoInfo.format.filter(
+      (f) =>
+        f.mimeType && f.mimeType.includes("mp4") && f.hasVideo && f.hasAudio
+    );
+
+    if (mp4Formats.length > 0) {
+      // Sort by quality and pick the best one
+      bestFormat = mp4Formats.sort((a, b) => {
+        const qualityA = parseInt(a.quality?.replace("p", "") || "0");
+        const qualityB = parseInt(b.quality?.replace("p", "") || "0");
+        return qualityB - qualityA; // Higher quality first
+      })[0];
+    } else {
+      // Fallback: any format with both video and audio
+      bestFormat = videoInfo.format.find((f) => f.hasVideo && f.hasAudio);
+    }
+
+    if (!bestFormat || !bestFormat.url) {
+      return res.status(404).json({ error: "No suitable video format found" });
+    }
+
+    console.log(
+      `Best format found: ${bestFormat.mimeType} - ${bestFormat.quality}`
+    );
+
+    res.json({
+      streamUrl: bestFormat.url,
+      quality: bestFormat.quality,
+      mimeType: bestFormat.mimeType,
+      hasVideo: bestFormat.hasVideo,
+      hasAudio: bestFormat.hasAudio,
+    });
+  } catch (error) {
+    console.error("Error getting stream URL:", error);
+    res
+      .status(500)
+      .json({ error: "Failed to get stream URL", details: error.message });
   }
 });
 
@@ -216,6 +292,7 @@ app.get("/api/formats/:videoId", async (req, res) => {
       hasVideo: format.hasVideo || false,
       hasAudio: format.hasAudio || false,
       filesize: format.contentLength || "unknown",
+      url: format.url ? "available" : "unavailable",
     }));
 
     res.json({ formats });
