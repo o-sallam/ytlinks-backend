@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const puppeteer = require("puppeteer");
 const ytdl = require("ytdl-core");
 const play = require("play-dl");
 
@@ -22,7 +21,7 @@ app.use(cors(corsOptions));
 // Parse JSON bodies
 app.use(express.json());
 
-// YouTube search API endpoint
+// YouTube search API endpoint using play-dl
 app.get("/api/youtube_search", async (req, res) => {
   const { keyword, page = 1 } = req.query;
 
@@ -31,75 +30,37 @@ app.get("/api/youtube_search", async (req, res) => {
   }
 
   try {
-    // Launch puppeteer browser
-    console.log("Launching Puppeteer browser...");
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--single-process",
-      ],
-      executablePath:
-        process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
+    console.log(`Searching YouTube for: ${keyword}`);
+
+    // Use play-dl to search YouTube
+    const searchResults = await play.search(keyword, {
+      limit: 10,
+      source: { youtube: "video" },
     });
 
-    console.log("New page created in Puppeteer.");
-    const puppeteerPage = await browser.newPage();
+    const videos = searchResults.slice(0, 5).map((video) => ({
+      title: video.title || "",
+      url: video.url || "",
+      channel: video.channel?.name || "",
+      views: video.views ? video.views.toString() : "",
+      uploadDate: video.uploadedAt || "",
+      thumbnail: video.thumbnails?.[0]?.url || "",
+      duration: video.durationInSec
+        ? `${Math.floor(video.durationInSec / 60)}:${(video.durationInSec % 60)
+            .toString()
+            .padStart(2, "0")}`
+        : "",
+    }));
 
-    // Navigate to YouTube search page
-    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(
-      keyword
-    )}`;
-    console.log(`Navigating to URL: ${searchUrl}`);
-    await puppeteerPage.goto(searchUrl, { waitUntil: "networkidle2" });
-    console.log("Navigation to YouTube search page completed.");
-
-    // Extract video information
-    console.log("Extracting video information from the page...");
-    const videos = await puppeteerPage.evaluate(() => {
-      const videoElements = Array.from(
-        document.querySelectorAll("ytd-video-renderer")
-      );
-      return videoElements.slice(0, 5).map((videoElement) => {
-        const titleElement = videoElement.querySelector("#video-title");
-        const channelElement = videoElement.querySelector(
-          "#channel-name #text"
-        );
-        const metadataElements = videoElement.querySelectorAll(
-          "#metadata-line span"
-        );
-        const viewsElement = metadataElements[0];
-        const uploadDateElement = metadataElements[1];
-
-        return {
-          title: titleElement ? titleElement.textContent.trim() : "",
-          url: titleElement ? titleElement.href : "",
-          channel: channelElement ? channelElement.textContent.trim() : "",
-          views: viewsElement ? viewsElement.textContent.trim() : "",
-          uploadDate: uploadDateElement
-            ? uploadDateElement.textContent.trim()
-            : "",
-        };
-      });
-    });
-
-    console.log("Closing Puppeteer browser...");
-    await browser.close();
-    console.log("Browser closed successfully.");
-
+    console.log(`Found ${videos.length} videos`);
     res.json(videos);
   } catch (error) {
-    console.error("Error scraping YouTube:", error);
-    console.error("Request details:", { keyword, page });
-    res.status(500).json({ error: "Failed to scrape YouTube search results" });
+    console.error("Error searching YouTube:", error);
+    res.status(500).json({ error: "Failed to search YouTube videos" });
   }
 });
 
-// YouTube video details endpoint
+// YouTube video details endpoint using ytdl-core
 app.get("/api/video/:videoId", async (req, res) => {
   const { videoId } = req.params;
 
@@ -108,63 +69,36 @@ app.get("/api/video/:videoId", async (req, res) => {
   }
 
   try {
-    console.log("Launching Puppeteer browser for video details...");
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--single-process",
-      ],
-      executablePath:
-        process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
-    });
-
-    const puppeteerPage = await browser.newPage();
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    console.log(`Navigating to video URL: ${videoUrl}`);
+    console.log(`Getting video info for: ${videoUrl}`);
 
-    await puppeteerPage.goto(videoUrl, { waitUntil: "networkidle2" });
+    // Get video info using ytdl-core
+    const info = await ytdl.getInfo(videoUrl);
+    const videoDetails = info.videoDetails;
 
-    // Extract video details
-    const videoDetails = await puppeteerPage.evaluate(() => {
-      const title = document
-        .querySelector("h1.ytd-video-primary-info-renderer")
-        ?.textContent?.trim();
-      const description = document
-        .querySelector("ytd-expander#description")
-        ?.textContent?.trim();
-      const channelName = document
-        .querySelector("ytd-channel-name yt-formatted-string.ytd-channel-name")
-        ?.textContent?.trim();
+    const result = {
+      title: videoDetails.title,
+      description: videoDetails.description,
+      channelName: videoDetails.author.name,
+      embedUrl: `https://www.youtube.com/embed/${videoId}`,
+      thumbnail: videoDetails.thumbnails?.[0]?.url,
+      duration: videoDetails.lengthSeconds,
+      views: videoDetails.viewCount,
+      uploadDate: videoDetails.publishDate,
+    };
 
-      return {
-        title,
-        description,
-        channelName,
-        embedUrl: `https://www.youtube.com/embed/${
-          window.location.search.split("v=")[1]
-        }`,
-      };
-    });
-
-    await browser.close();
-    res.json(videoDetails);
+    res.json(result);
   } catch (error) {
     console.error("Error fetching video details:", error);
     res.status(500).json({ error: "Failed to fetch video details" });
   }
 });
 
-// Video streaming endpoint
-const { spawn } = require("child_process");
-
-app.get("/api/stream/:videoId", (req, res) => {
+// Video streaming endpoint using ytdl-core
+app.get("/api/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
   console.log("Requested videoId:", videoId);
+
   if (
     !videoId ||
     typeof videoId !== "string" ||
@@ -175,47 +109,100 @@ app.get("/api/stream/:videoId", (req, res) => {
       .status(400)
       .json({ error: "Invalid or missing videoId", details: videoId });
   }
-  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  console.log(`Spawning yt-dlp for: ${videoUrl}`);
 
-  // yt-dlp command: best video+audio up to 720p, output to stdout
-  const ytDlp = spawn("/usr/local/bin/yt-dlp", [
-    "-f",
-    "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "-o",
-    "-",
-    videoUrl,
-  ]);
+  try {
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    console.log(`Streaming video: ${videoUrl}`);
 
-  res.setHeader("Content-Type", "video/mp4");
+    // Check if video is available
+    if (!ytdl.validateURL(videoUrl)) {
+      return res.status(400).json({ error: "Invalid YouTube URL" });
+    }
 
-  ytDlp.stdout.pipe(res);
+    // Get video info to check availability
+    const info = await ytdl.getInfo(videoUrl);
 
-  ytDlp.stderr.on("data", (data) => {
-    console.error("yt-dlp error:", data.toString());
-  });
+    // Set appropriate headers
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Accept-Ranges", "bytes");
 
-  ytDlp.on("error", (err) => {
-    console.error("Failed to start yt-dlp:", err);
+    // Stream options - get best quality up to 720p
+    const streamOptions = {
+      filter: (format) => {
+        return (
+          format.container === "mp4" &&
+          format.hasVideo &&
+          format.hasAudio &&
+          format.height <= 720
+        );
+      },
+      quality: "highest",
+    };
+
+    // Create and pipe the stream
+    const stream = ytdl(videoUrl, streamOptions);
+
+    stream.on("error", (err) => {
+      console.error("Stream error:", err);
+      if (!res.headersSent) {
+        res
+          .status(500)
+          .json({ error: "Streaming failed", details: err.message });
+      }
+    });
+
+    stream.on("info", (info, format) => {
+      console.log(`Streaming format: ${format.quality} ${format.container}`);
+    });
+
+    // Pipe the stream to response
+    stream.pipe(res);
+  } catch (error) {
+    console.error("Error streaming video:", error);
     if (!res.headersSent) {
       res
         .status(500)
-        .json({ error: "Failed to start yt-dlp", details: err.message });
+        .json({ error: "Failed to stream video", details: error.message });
     }
-  });
+  }
+});
 
-  ytDlp.on("close", (code) => {
-    if (code !== 0) {
-      console.error(`yt-dlp exited with code ${code}`);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "yt-dlp failed", code });
-      }
+// Get available video formats
+app.get("/api/formats/:videoId", async (req, res) => {
+  const { videoId } = req.params;
+
+  if (!videoId) {
+    return res.status(400).json({ error: "Video ID is required" });
+  }
+
+  try {
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+    if (!ytdl.validateURL(videoUrl)) {
+      return res.status(400).json({ error: "Invalid YouTube URL" });
     }
-  });
+
+    const info = await ytdl.getInfo(videoUrl);
+    const formats = info.formats.map((format) => ({
+      itag: format.itag,
+      quality: format.quality,
+      qualityLabel: format.qualityLabel,
+      container: format.container,
+      hasVideo: format.hasVideo,
+      hasAudio: format.hasAudio,
+      filesize: format.contentLength,
+    }));
+
+    res.json({ formats });
+  } catch (error) {
+    console.error("Error getting video formats:", error);
+    res.status(500).json({ error: "Failed to get video formats" });
+  }
 });
 
 // Serve static assets in production
 if (process.env.NODE_ENV === "production") {
+  const path = require("path");
   app.use(express.static("client/build"));
 
   app.get("*", (req, res) => {
