@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const ytdl = require("ytdl-core");
 const play = require("play-dl");
 
 const app = express();
@@ -60,7 +59,7 @@ app.get("/api/youtube_search", async (req, res) => {
   }
 });
 
-// YouTube video details endpoint using ytdl-core
+// YouTube video details endpoint using play-dl (more reliable)
 app.get("/api/video/:videoId", async (req, res) => {
   const { videoId } = req.params;
 
@@ -72,39 +71,25 @@ app.get("/api/video/:videoId", async (req, res) => {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     console.log(`Getting video info for: ${videoUrl}`);
 
-    // Validate URL first
-    if (!ytdl.validateURL(videoUrl)) {
-      return res.status(400).json({ error: "Invalid YouTube URL" });
-    }
-
-    // Get video info using ytdl-core with options for better reliability
-    const info = await ytdl.getInfo(videoUrl, {
-      requestOptions: {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        },
-      },
-    });
-
-    const videoDetails = info.videoDetails;
+    // Use play-dl for video info (more reliable than ytdl-core)
+    const videoInfo = await play.video_info(videoUrl);
+    const videoDetails = videoInfo.video_details;
 
     const result = {
       title: videoDetails.title || "Unknown Title",
-      description:
-        videoDetails.shortDescription || videoDetails.description || "",
-      channelName:
-        videoDetails.author?.name ||
-        videoDetails.ownerChannelName ||
-        "Unknown Channel",
+      description: videoDetails.description || "",
+      channelName: videoDetails.channel?.name || "Unknown Channel",
       embedUrl: `https://www.youtube.com/embed/${videoId}`,
       thumbnail:
         videoDetails.thumbnails?.[0]?.url ||
         `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-      duration: videoDetails.lengthSeconds || "0",
-      views: videoDetails.viewCount || "0",
-      uploadDate:
-        videoDetails.publishDate || videoDetails.uploadDate || "Unknown",
+      duration: videoDetails.durationInSec
+        ? Math.floor(videoDetails.durationInSec / 60) +
+          ":" +
+          String(videoDetails.durationInSec % 60).padStart(2, "0")
+        : "0:00",
+      views: videoDetails.views?.toString() || "0",
+      uploadDate: videoDetails.uploadedAt || "Unknown",
     };
 
     console.log("Video details retrieved successfully:", result.title);
@@ -114,7 +99,10 @@ app.get("/api/video/:videoId", async (req, res) => {
     console.error("Full error:", error);
 
     // More specific error handling
-    if (error.message.includes("Video unavailable")) {
+    if (
+      error.message.includes("Video unavailable") ||
+      error.message.includes("not found")
+    ) {
       res.status(404).json({ error: "Video not found or unavailable" });
     } else if (error.message.includes("private")) {
       res.status(403).json({ error: "Video is private" });
@@ -129,7 +117,7 @@ app.get("/api/video/:videoId", async (req, res) => {
   }
 });
 
-// Video streaming endpoint using ytdl-core
+// Video streaming endpoint using play-dl
 app.get("/api/stream/:videoId", async (req, res) => {
   const { videoId } = req.params;
   console.log("Requested videoId:", videoId);
@@ -149,9 +137,15 @@ app.get("/api/stream/:videoId", async (req, res) => {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     console.log(`Streaming video: ${videoUrl}`);
 
-    // Check if video is available
-    if (!ytdl.validateURL(videoUrl)) {
-      return res.status(400).json({ error: "Invalid YouTube URL" });
+    // Get stream info using play-dl
+    const stream = await play.stream(videoUrl, {
+      quality: 2, // 0 = lowest, 1 = medium, 2 = highest available
+    });
+
+    if (!stream || !stream.stream) {
+      return res
+        .status(404)
+        .json({ error: "No stream available for this video" });
     }
 
     // Set appropriate headers
@@ -159,30 +153,20 @@ app.get("/api/stream/:videoId", async (req, res) => {
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "no-cache");
 
-    // Stream options - get best quality up to 720p
-    const streamOptions = {
-      filter: (format) => {
-        return (
-          format.container === "mp4" &&
-          format.hasVideo &&
-          format.hasAudio &&
-          format.height &&
-          format.height <= 720
-        );
-      },
-      quality: "highest",
-      requestOptions: {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        },
-      },
-    };
+    console.log(`Streaming format: ${stream.type} quality: ${stream.quality}`);
 
-    // Create and pipe the stream
-    const stream = ytdl(videoUrl, streamOptions);
+    // Handle client disconnect
+    req.on("close", () => {
+      console.log("Client disconnected, destroying stream");
+      if (stream.stream && typeof stream.stream.destroy === "function") {
+        stream.stream.destroy();
+      }
+    });
 
-    stream.on("error", (err) => {
+    // Pipe the stream to response
+    stream.stream.pipe(res);
+
+    stream.stream.on("error", (err) => {
       console.error("Stream error:", err);
       if (!res.headersSent) {
         res
@@ -190,34 +174,16 @@ app.get("/api/stream/:videoId", async (req, res) => {
           .json({ error: "Streaming failed", details: err.message });
       }
     });
-
-    stream.on("info", (info, format) => {
-      console.log(
-        `Streaming format: ${format.quality || format.qualityLabel} ${
-          format.container
-        }`
-      );
-    });
-
-    stream.on("response", (response) => {
-      console.log("Stream response status:", response.statusCode);
-    });
-
-    // Handle client disconnect
-    req.on("close", () => {
-      console.log("Client disconnected, destroying stream");
-      stream.destroy();
-    });
-
-    // Pipe the stream to response
-    stream.pipe(res);
   } catch (error) {
     console.error("Error streaming video:", error);
     if (!res.headersSent) {
       // More specific error messages
-      if (error.message.includes("Video unavailable")) {
+      if (
+        error.message.includes("Video unavailable") ||
+        error.message.includes("not found")
+      ) {
         res.status(404).json({ error: "Video not found or unavailable" });
-      } else if (error.message.includes("No such format found")) {
+      } else if (error.message.includes("No stream")) {
         res.status(400).json({ error: "No suitable video format found" });
       } else {
         res
@@ -228,7 +194,7 @@ app.get("/api/stream/:videoId", async (req, res) => {
   }
 });
 
-// Get available video formats
+// Get available video formats using play-dl
 app.get("/api/formats/:videoId", async (req, res) => {
   const { videoId } = req.params;
 
@@ -239,25 +205,25 @@ app.get("/api/formats/:videoId", async (req, res) => {
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    if (!ytdl.validateURL(videoUrl)) {
-      return res.status(400).json({ error: "Invalid YouTube URL" });
-    }
+    // Get video info using play-dl
+    const videoInfo = await play.video_info(videoUrl);
 
-    const info = await ytdl.getInfo(videoUrl);
-    const formats = info.formats.map((format) => ({
-      itag: format.itag,
-      quality: format.quality,
-      qualityLabel: format.qualityLabel,
-      container: format.container,
-      hasVideo: format.hasVideo,
-      hasAudio: format.hasAudio,
-      filesize: format.contentLength,
+    // Extract format information
+    const formats = videoInfo.format.map((format, index) => ({
+      id: index,
+      quality: format.quality || "unknown",
+      container: format.mimeType?.split("/")[1]?.split(";")[0] || "unknown",
+      hasVideo: format.hasVideo || false,
+      hasAudio: format.hasAudio || false,
+      filesize: format.contentLength || "unknown",
     }));
 
     res.json({ formats });
   } catch (error) {
     console.error("Error getting video formats:", error);
-    res.status(500).json({ error: "Failed to get video formats" });
+    res
+      .status(500)
+      .json({ error: "Failed to get video formats", details: error.message });
   }
 });
 
