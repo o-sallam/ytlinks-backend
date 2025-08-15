@@ -13,17 +13,53 @@ const corsOptions = {
     "https://ytlinks.vercel.app",
     "https://myblogtest.kesug.com",
   ],
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  credentials: true,
+  optionsSuccessStatus: 200,
 };
+
+// Apply CORS middleware
 app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options("*", cors(corsOptions));
 
 // Parse JSON bodies
 app.use(express.json());
 
+// Add request logging
+app.use((req, res, next) => {
+  console.log(
+    `${new Date().toISOString()} - ${req.method} ${req.path}`,
+    req.query
+  );
+  next();
+});
+
+// Add response headers middleware
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
+  res.header("Access-Control-Max-Age", "3600");
+  next();
+});
+
 // YouTube search API endpoint using play-dl
 app.get("/api/youtube_search", async (req, res) => {
   const { keyword, page = 1 } = req.query;
+
+  // Add CORS headers explicitly
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
 
   if (!keyword) {
     return res.status(400).json({ error: "Keyword parameter is required" });
@@ -63,6 +99,14 @@ app.get("/api/youtube_search", async (req, res) => {
 // YouTube video details endpoint using play-dl (more reliable)
 app.get("/api/video/:videoId", async (req, res) => {
   const { videoId } = req.params;
+
+  // Add CORS headers explicitly
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With"
+  );
 
   if (!videoId) {
     return res.status(400).json({ error: "Video ID is required" });
@@ -317,7 +361,36 @@ if (process.env.NODE_ENV === "production") {
 const PORT = process.env.PORT || 5000;
 
 app.get("/health", (req, res) => {
-  res.status(200).send({ status: "OK" });
+  res.status(200).json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    port: PORT,
+    env: process.env.NODE_ENV || "development",
+  });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error("Global error handler:", error);
+  res.status(500).json({
+    error: "Internal server error",
+    details: error.message,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// 404 handler
+app.use("*", (req, res) => {
+  res.status(404).json({
+    error: "Route not found",
+    path: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
+});
