@@ -1,33 +1,27 @@
 {
-  "name": "ytlinks",
+  "name": "ytlinks-backend",
   "version": "1.0.0",
-  "description": "YouTube search scraper app",
+  "description": "YouTube links backend API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "server": "nodemon server.js",
-    "client": "cd client && npm start",
-    "dev": "concurrently \"npm run server\" \"npm run client\"",
-    "install-client": "cd client && npm install",
-    "build": "cd client && npm run build",
-    "heroku-postbuild": "npm run install-client && npm run build"
+    "dev": "nodemon server.js",
+    "build": "echo 'No build step required'"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "play-dl": "^1.9.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "keywords": [
     "youtube",
-    "scraper",
-    "express",
-    "react"
+    "api",
+    "streaming",
+    "express"
   ],
-  "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "cors": "^2.8.5",
-    "destroy": "^1.2.0",
-    "express": "^4.18.2",
-    "play-dl": "^1.9.7"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.2",
-    "nodemon": "^3.0.1"
-  }
+  "author": "Your Name",
+  "license": "MIT"
 }

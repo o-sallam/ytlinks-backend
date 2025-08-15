@@ -5,25 +5,22 @@ const play = require("play-dl");
 
 const app = express();
 
-// Enable CORS for all origins
-const corsOptions = {
-  origin: [
-    "https://ytlinks-backend-production.up.railway.app",
-    "http://localhost:3000",
-    "https://ytlinks.vercel.app",
-    "https://myblogtest.kesug.com",
-  ],
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  credentials: true,
-  optionsSuccessStatus: 200,
-};
+// Simple CORS configuration
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["*"],
+  })
+);
 
-// Apply CORS middleware
-app.use(cors(corsOptions));
-
-// Handle preflight requests
-app.options("*", cors(corsOptions));
+// Additional CORS headers
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "*");
+  next();
+});
 
 // Parse JSON bodies
 app.use(express.json());
@@ -389,8 +386,23 @@ app.use("*", (req, res) => {
   });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log("Server started successfully at:", new Date().toISOString());
+
+  // Test play-dl functionality
+  console.log("Testing play-dl...");
+  play
+    .search("test", { limit: 1 })
+    .then((results) => {
+      console.log(
+        "Play-dl test successful:",
+        results.length > 0 ? "Found videos" : "No videos found"
+      );
+    })
+    .catch((err) => {
+      console.error("Play-dl test failed:", err.message);
+    });
 });
