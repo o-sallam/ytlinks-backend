@@ -72,25 +72,60 @@ app.get("/api/video/:videoId", async (req, res) => {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     console.log(`Getting video info for: ${videoUrl}`);
 
-    // Get video info using ytdl-core
-    const info = await ytdl.getInfo(videoUrl);
+    // Validate URL first
+    if (!ytdl.validateURL(videoUrl)) {
+      return res.status(400).json({ error: "Invalid YouTube URL" });
+    }
+
+    // Get video info using ytdl-core with options for better reliability
+    const info = await ytdl.getInfo(videoUrl, {
+      requestOptions: {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      },
+    });
+
     const videoDetails = info.videoDetails;
 
     const result = {
-      title: videoDetails.title,
-      description: videoDetails.description,
-      channelName: videoDetails.author.name,
+      title: videoDetails.title || "Unknown Title",
+      description:
+        videoDetails.shortDescription || videoDetails.description || "",
+      channelName:
+        videoDetails.author?.name ||
+        videoDetails.ownerChannelName ||
+        "Unknown Channel",
       embedUrl: `https://www.youtube.com/embed/${videoId}`,
-      thumbnail: videoDetails.thumbnails?.[0]?.url,
-      duration: videoDetails.lengthSeconds,
-      views: videoDetails.viewCount,
-      uploadDate: videoDetails.publishDate,
+      thumbnail:
+        videoDetails.thumbnails?.[0]?.url ||
+        `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+      duration: videoDetails.lengthSeconds || "0",
+      views: videoDetails.viewCount || "0",
+      uploadDate:
+        videoDetails.publishDate || videoDetails.uploadDate || "Unknown",
     };
 
+    console.log("Video details retrieved successfully:", result.title);
     res.json(result);
   } catch (error) {
-    console.error("Error fetching video details:", error);
-    res.status(500).json({ error: "Failed to fetch video details" });
+    console.error("Error fetching video details:", error.message);
+    console.error("Full error:", error);
+
+    // More specific error handling
+    if (error.message.includes("Video unavailable")) {
+      res.status(404).json({ error: "Video not found or unavailable" });
+    } else if (error.message.includes("private")) {
+      res.status(403).json({ error: "Video is private" });
+    } else if (error.message.includes("age")) {
+      res.status(403).json({ error: "Age-restricted video" });
+    } else {
+      res.status(500).json({
+        error: "Failed to fetch video details",
+        details: error.message,
+      });
+    }
   }
 });
 
@@ -119,12 +154,10 @@ app.get("/api/stream/:videoId", async (req, res) => {
       return res.status(400).json({ error: "Invalid YouTube URL" });
     }
 
-    // Get video info to check availability
-    const info = await ytdl.getInfo(videoUrl);
-
     // Set appropriate headers
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "no-cache");
 
     // Stream options - get best quality up to 720p
     const streamOptions = {
@@ -133,10 +166,17 @@ app.get("/api/stream/:videoId", async (req, res) => {
           format.container === "mp4" &&
           format.hasVideo &&
           format.hasAudio &&
+          format.height &&
           format.height <= 720
         );
       },
       quality: "highest",
+      requestOptions: {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      },
     };
 
     // Create and pipe the stream
@@ -152,7 +192,21 @@ app.get("/api/stream/:videoId", async (req, res) => {
     });
 
     stream.on("info", (info, format) => {
-      console.log(`Streaming format: ${format.quality} ${format.container}`);
+      console.log(
+        `Streaming format: ${format.quality || format.qualityLabel} ${
+          format.container
+        }`
+      );
+    });
+
+    stream.on("response", (response) => {
+      console.log("Stream response status:", response.statusCode);
+    });
+
+    // Handle client disconnect
+    req.on("close", () => {
+      console.log("Client disconnected, destroying stream");
+      stream.destroy();
     });
 
     // Pipe the stream to response
@@ -160,9 +214,16 @@ app.get("/api/stream/:videoId", async (req, res) => {
   } catch (error) {
     console.error("Error streaming video:", error);
     if (!res.headersSent) {
-      res
-        .status(500)
-        .json({ error: "Failed to stream video", details: error.message });
+      // More specific error messages
+      if (error.message.includes("Video unavailable")) {
+        res.status(404).json({ error: "Video not found or unavailable" });
+      } else if (error.message.includes("No such format found")) {
+        res.status(400).json({ error: "No suitable video format found" });
+      } else {
+        res
+          .status(500)
+          .json({ error: "Failed to stream video", details: error.message });
+      }
     }
   }
 });
